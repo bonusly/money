@@ -1,11 +1,10 @@
 # encoding: utf-8
 
-require "json"
-require "money/currency/loader"
-require "money/currency/heuristics"
+require 'money/errors'
+require 'money/currency/heuristics'
+require 'money/currency/table'
 
 class Money
-
   # Represents a specific currency unit.
   #
   # @see https://en.wikipedia.org/wiki/Currency
@@ -15,202 +14,111 @@ class Money
     extend Enumerable
     extend Money::Currency::Heuristics
 
-    # Keeping cached instances in sync between threads
-    @@mutex = Mutex.new
-    @@instances = {}
+    def self.currency_table
+      @currency_table ||= Money::Currency::Table.new
+    end
 
-    # Thrown when a Currency has been registered without all the attributes
-    # which are required for the current action.
-    class MissingAttributeError < StandardError
-      def initialize(method, currency, attribute)
-        super(
-          "Can't call Currency.#{method} - currency '#{currency}' is missing "\
-          "the attribute '#{attribute}'"
-        )
+    def self.find(id)
+      id = id.to_s.downcase.to_sym
+      new(id)
+    rescue UnknownCurrency
+      nil
+    end
+
+    # Lookup a currency with given +num+ as an ISO 4217 numeric and returns an
+    # +Currency+ instance on success, +nil+ otherwise.
+    #
+    # @param [#to_s] num used to look into +table+ in +iso_numeric+ and find
+    # the right currency id.
+    #
+    # @return [Money::Currency]
+    #
+    # @example
+    #   Money::Currency.find_by_iso_numeric(978) #=> #<Money::Currency id: eur ...>
+    #   Money::Currency.find_by_iso_numeric('001') #=> nil
+    def self.find_by_iso_numeric(num)
+      new(currency_table.find_id_by_iso_numeric(num))
+    rescue UnknownCurrency
+      nil
+    end
+
+    # Wraps the object in a +Currency+ unless it's already a +Currency+
+    # object.
+    #
+    # @param [Object] object The object to attempt and wrap as a +Currency+
+    # object.
+    #
+    # @return [Money::Currency]
+    #
+    # @example
+    #   c1 = Money::Currency.new(:usd)
+    #   Money::Currency.wrap(nil)   #=> nil
+    #   Money::Currency.wrap(c1)    #=> #<Money::Currency id: usd ...>
+    #   Money::Currency.wrap("usd") #=> #<Money::Currency id: usd ...>
+    def self.wrap(object)
+      if object.nil?
+        nil
+      elsif object.is_a?(Currency)
+        object
+      else
+        new(object)
       end
     end
 
-    # Thrown when an unknown currency is requested.
-    class UnknownCurrency < ArgumentError; end
-
-    class << self
-      def new(id)
-        id = id.to_s.downcase
-        unless stringified_keys.include?(id)
-          raise UnknownCurrency, "Unknown currency '#{id}'"
+    # List of known currencies.
+    #
+    # == monetary unit
+    # The standard unit of value of a currency, as the dollar in the United States or the peso in Mexico.
+    # https://www.answers.com/topic/monetary-unit
+    # == fractional monetary unit, subunit
+    # A monetary unit that is valued at a fraction (usually one hundredth) of the basic monetary unit
+    # https://www.answers.com/topic/fractional-monetary-unit-subunit
+    #
+    # See https://en.wikipedia.org/wiki/List_of_circulating_currencies and
+    # http://search.cpan.org/~tnguyen/Locale-Currency-Format-1.28/Format.pm
+    def self.all
+      currency_table.all.map do |curr|
+        c = new(curr)
+        if c.priority.nil?
+          raise MissingAttributeError.new(:all, c.id, :priority)
         end
+        c
+      end.sort_by(&:priority)
+    end
 
-        _instances[id] || @@mutex.synchronize { _instances[id] ||= super }
-      end
+    def self.register(curr)
+      currency_table.register(curr)
+    end
 
-      def _instances
-        @@instances
-      end
+    # Unregister a currency.
+    #
+    # @param [Object] curr A Hash with the key `:iso_code`, or the ISO code
+    #   as a String or Symbol.
+    #
+    # @return [Boolean] true if the currency previously existed, false
+    #   if it didn't.
+    def self.unregister(curr)
+      currency_table.unregister(curr)
+    end
 
-      # Lookup a currency with given +id+ an returns a +Currency+ instance on
-      # success, +nil+ otherwise.
-      #
-      # @param [String, Symbol, #to_s] id Used to look into +table+ and
-      # retrieve the applicable attributes.
-      #
-      # @return [Money::Currency]
-      #
-      # @example
-      #   Money::Currency.find(:eur) #=> #<Money::Currency id: eur ...>
-      #   Money::Currency.find(:foo) #=> nil
-      def find(id)
-        id = id.to_s.downcase.to_sym
-        new(id)
-      rescue UnknownCurrency
-        nil
-      end
+    def self.each
+      all.each { |c| yield(c) }
+    end
 
-      # Lookup a currency with given +num+ as an ISO 4217 numeric and returns an
-      # +Currency+ instance on success, +nil+ otherwise.
-      #
-      # @param [#to_s] num used to look into +table+ in +iso_numeric+ and find
-      # the right currency id.
-      #
-      # @return [Money::Currency]
-      #
-      # @example
-      #   Money::Currency.find_by_iso_numeric(978) #=> #<Money::Currency id: eur ...>
-      #   Money::Currency.find_by_iso_numeric('001') #=> nil
-      def find_by_iso_numeric(num)
-        num = num.to_s
-        return if num.empty?
-        id, _ = self.table.find { |key, currency| currency[:iso_numeric] == num }
-        new(id)
-      rescue UnknownCurrency
-        nil
-      end
+    attr_reader :id
 
-      # Wraps the object in a +Currency+ unless it's already a +Currency+
-      # object.
-      #
-      # @param [Object] object The object to attempt and wrap as a +Currency+
-      # object.
-      #
-      # @return [Money::Currency]
-      #
-      # @example
-      #   c1 = Money::Currency.new(:usd)
-      #   Money::Currency.wrap(nil)   #=> nil
-      #   Money::Currency.wrap(c1)    #=> #<Money::Currency id: usd ...>
-      #   Money::Currency.wrap("usd") #=> #<Money::Currency id: usd ...>
-      def wrap(object)
-        if object.nil?
-          nil
-        elsif object.is_a?(Currency)
-          object
-        else
-          Currency.new(object)
-        end
-      end
-
-      # List of known currencies.
-      #
-      # == monetary unit
-      # The standard unit of value of a currency, as the dollar in the United States or the peso in Mexico.
-      # https://www.answers.com/topic/monetary-unit
-      # == fractional monetary unit, subunit
-      # A monetary unit that is valued at a fraction (usually one hundredth) of the basic monetary unit
-      # https://www.answers.com/topic/fractional-monetary-unit-subunit
-      #
-      # See https://en.wikipedia.org/wiki/List_of_circulating_currencies and
-      # http://search.cpan.org/~tnguyen/Locale-Currency-Format-1.28/Format.pm
-      def table
-        @table ||= Loader.load_currencies
-      end
-
-      # List the currencies imported and registered
-      # @return [Array]
-      #
-      # @example
-      #   Money::Currency.iso_codes()
-      #   [#<Currency ..USD>, 'CAD', 'EUR']...
-      def all
-        table.keys.map do |curr|
-          c = Currency.new(curr)
-          if c.priority.nil?
-            raise MissingAttributeError.new(:all, c.id, :priority)
-          end
-          c
-        end.sort_by(&:priority)
-      end
-
-      # We need a string-based validator before creating an unbounded number of
-      # symbols.
-      # http://www.randomhacks.net/articles/2007/01/20/13-ways-of-looking-at-a-ruby-symbol#11
-      # https://github.com/RubyMoney/money/issues/132
-      #
-      # @return [Set]
-      def stringified_keys
-        @stringified_keys ||= stringify_keys
-      end
-
-      # Register a new currency
-      #
-      # @param curr [Hash] information about the currency
-      # @option priority [Numeric] a numerical value you can use to sort/group
-      #   the currency list
-      # @option iso_code [String] the international 3-letter code as defined
-      #   by the ISO 4217 standard
-      # @option iso_numeric [Integer] the international 3-digit code as
-      #   defined by the ISO 4217 standard
-      # @option name [String] the currency name
-      # @option symbol [String] the currency symbol (UTF-8 encoded)
-      # @option subunit [String] the name of the fractional monetary unit
-      # @option subunit_to_unit [Numeric] the proportion between the unit and
-      #   the subunit
-      # @option separator [String] character between the whole and fraction
-      #   amounts
-      # @option delimiter [String] character between each thousands place
-      def register(curr)
-        key = curr.fetch(:iso_code).downcase.to_sym
-        @@mutex.synchronize { _instances.delete(key.to_s) }
-        @table[key] = curr
-        @stringified_keys = nil
-      end
-
-      # Inherit a new currency from existing one
-      #
-      # @param parent_iso_code [String] the international 3-letter code as defined
-      # @param curr [Hash] See {register} method for hash structure
-      def inherit(parent_iso_code, curr)
-        parent_iso_code = parent_iso_code.downcase.to_sym
-        curr = @table.fetch(parent_iso_code, {}).merge(curr)
-        register(curr)
-      end
-
-      # Unregister a currency.
-      #
-      # @param [Object] curr A Hash with the key `:iso_code`, or the ISO code
-      #   as a String or Symbol.
-      #
-      # @return [Boolean] true if the currency previously existed, false
-      #   if it didn't.
-      def unregister(curr)
-        if curr.is_a?(Hash)
-          key = curr.fetch(:iso_code).downcase.to_sym
-        else
-          key = curr.downcase.to_sym
-        end
-        existed = @table.delete(key)
-        @stringified_keys = nil if existed
-        existed ? true : false
-      end
-
-      def each
-        all.each { |c| yield(c) }
-      end
-
-
-      private
-
-      def stringify_keys
-        table.keys.each_with_object(Set.new) { |k, set| set.add(k.to_s.downcase) }
-      end
+    # Create a new +Currency+ object.
+    #
+    # @param [String, Symbol, #to_s] id Used to look into +table+ and retrieve
+    #  the applicable attributes.
+    #
+    # @return [Money::Currency]
+    #
+    # @example
+    #   Money::Currency.new(:usd) #=> #<Money::Currency id: usd ...>
+    def initialize(id)
+      @id = id&.downcase&.to_sym
+      validate_currency
     end
 
     # @!attribute [r] id
@@ -248,29 +156,66 @@ class Money
     #     should it come after?
     # @!attribute [r] smallest_denomination
     #   @return [Integer] Smallest amount of cash possible (in the subunit of
-    #     this currency)
 
-    attr_reader :id, :priority, :iso_code, :iso_numeric, :name, :symbol,
-      :disambiguate_symbol, :html_entity, :subunit, :subunit_to_unit, :decimal_mark,
-      :thousands_separator, :symbol_first, :smallest_denomination
+    def alternate_symbols
+      data_for_currency[:alternate_symbols]
+    end
+
+    def priority
+      data_for_currency[:priority]
+    end
+
+    def iso_code
+      data_for_currency[:iso_code]
+    end
+
+    def iso_numeric
+      data_for_currency[:iso_numeric]
+    end
+
+    def name
+      data_for_currency[:name]
+    end
+
+    def symbol
+      data_for_currency[:symbol]
+    end
+
+    def disambiguate_symbol
+      data_for_currency[:disambiguate_symbol]
+    end
+
+    def html_entity
+      data_for_currency[:html_entity]
+    end
+
+    def subunit
+      data_for_currency[:subunit]
+    end
+
+    def subunit_to_unit
+      data_for_currency[:subunit_to_unit]
+    end
+
+    def decimal_mark
+      data_for_currency[:decimal_mark]
+    end
+
+    def thousands_separator
+      data_for_currency[:thousands_separator]
+    end
+
+    def symbol_first
+      data_for_currency[:symbol_first]
+    end
+
+    def smallest_denomination
+      data_for_currency[:smallest_denomination]
+    end
 
     alias_method :separator, :decimal_mark
     alias_method :delimiter, :thousands_separator
     alias_method :eql?, :==
-
-    # Create a new +Currency+ object.
-    #
-    # @param [String, Symbol, #to_s] id Used to look into +table+ and retrieve
-    #  the applicable attributes.
-    #
-    # @return [Money::Currency]
-    #
-    # @example
-    #   Money::Currency.new(:usd) #=> #<Money::Currency id: usd ...>
-    def initialize(id)
-      @id = id.to_sym
-      initialize_data!
-    end
 
     # Compares +self+ with +other_currency+ against the value of +priority+
     # attribute.
@@ -397,7 +342,7 @@ class Money
     end
 
     def symbol_first?
-      !!@symbol_first
+      !!symbol_first
     end
 
     # Returns if a code currency is ISO.
@@ -420,26 +365,43 @@ class Money
     def exponent
       Math.log10(subunit_to_unit).round
     end
+
+    # Cache decimal places for subunit_to_unit values. Common ones pre-cached.
+    def self.decimal_places_cache
+      @decimal_places_cache ||= {1 => 0, 10 => 1, 100 => 2, 1000 => 3}
+    end
+
+    # The number of decimal places needed.
+    #
+    # @return [Integer]
+    def decimal_places
+      cache[subunit_to_unit] ||= calculate_decimal_places(subunit_to_unit)
+    end
     alias decimal_places exponent
 
     private
 
-    def initialize_data!
-      data = self.class.table[@id]
-      @alternate_symbols     = data[:alternate_symbols]
-      @decimal_mark          = data[:decimal_mark]
-      @disambiguate_symbol   = data[:disambiguate_symbol]
-      @html_entity           = data[:html_entity]
-      @iso_code              = data[:iso_code]
-      @iso_numeric           = data[:iso_numeric]
-      @name                  = data[:name]
-      @priority              = data[:priority]
-      @smallest_denomination = data[:smallest_denomination]
-      @subunit               = data[:subunit]
-      @subunit_to_unit       = data[:subunit_to_unit]
-      @symbol                = data[:symbol]
-      @symbol_first          = data[:symbol_first]
-      @thousands_separator   = data[:thousands_separator]
+    def cache
+      self.class.decimal_places_cache
+    end
+
+    # If we need to figure out how many decimal places we need we
+    # use repeated integer division.
+    def calculate_decimal_places(num)
+      i = 1
+      while num >= 10
+        num /= 10
+        i += 1 if num >= 10
+      end
+      i
+    end
+
+    def validate_currency
+      self.class.currency_table.validate_currency(id)
+    end
+
+    def data_for_currency
+      self.class.currency_table.fetch(id)
     end
   end
 end

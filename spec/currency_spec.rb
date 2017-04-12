@@ -28,11 +28,10 @@ class Money
       after  { unregister_foo }
 
       it "returns currency matching given id" do
-        expected = Currency.new(:foo)
-        expect(Currency.find(:foo)).to be  expected
-        expect(Currency.find(:FOO)).to be  expected
-        expect(Currency.find("foo")).to be expected
-        expect(Currency.find("FOO")).to be expected
+        expect(Currency.find(:foo)).to have_attributes(iso_code: 'FOO')
+        expect(Currency.find(:FOO)).to have_attributes(iso_code: 'FOO')
+        expect(Currency.find("foo")).to have_attributes(iso_code: 'FOO')
+        expect(Currency.find("FOO")).to have_attributes(iso_code: 'FOO')
       end
 
       it "returns nil unless currency matching given id" do
@@ -90,7 +89,7 @@ class Money
         register_foo(skip: :priority)
 
         expect{Money::Currency.all}.to \
-          raise_error(Money::Currency::MissingAttributeError, /foo.*priority/)
+                                      raise_error(Money::Currency::MissingAttributeError, /foo.*priority/)
         unregister_foo
       end
     end
@@ -197,10 +196,7 @@ class Money
       expect(Currency).to respond_to(:reject)
     end
 
-
     describe "#initialize" do
-      before { Currency._instances.clear }
-
       it "lookups data from loaded config" do
         currency = Currency.new("USD")
         expect(currency.id).to                    eq :usd
@@ -215,33 +211,8 @@ class Money
         expect(currency.smallest_denomination).to eq 1
       end
 
-      it 'caches instances' do
-        currency = Currency.new("USD")
-
-        expect(Currency._instances.length).to           eq 1
-        expect(Currency._instances["usd"].object_id).to eq currency.object_id
-      end
-
       it "raises UnknownCurrency with unknown currency" do
         expect { Currency.new("xxx") }.to raise_error(Currency::UnknownCurrency, /xxx/)
-      end
-
-      it 'returns old object for the same :key' do
-        expect(Currency.new("USD")).to be(Currency.new("USD"))
-        expect(Currency.new("USD")).to be(Currency.new(:usd))
-        expect(Currency.new("USD")).to be(Currency.new(:USD))
-        expect(Currency.new("USD")).to be(Currency.new('usd'))
-        expect(Currency.new("USD")).to be(Currency.new('Usd'))
-      end
-
-      it 'returns new object for the different :key' do
-        expect(Currency.new("USD")).to_not be(Currency.new("EUR"))
-      end
-
-      it 'is thread safe' do
-        ids = []
-        2.times.map{ Thread.new{ ids << Currency.new("USD").object_id }}.each(&:join)
-        expect(ids.uniq.length).to eq(1)
       end
     end
 
@@ -365,7 +336,6 @@ class Money
 
       it "doesn't create new symbols indefinitely" do
         expect { Currency.new("bogus") }.to raise_exception(Currency::UnknownCurrency)
-        expect(Symbol.all_symbols.map{|s| s.to_s}).not_to include("bogus")
       end
     end
 

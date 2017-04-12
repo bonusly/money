@@ -1,6 +1,8 @@
 class Money
   class Currency
     module Loader
+      require "json"
+
       DATA_PATH = File.expand_path("../../../../config", __FILE__)
 
       class << self
