@@ -1,6 +1,8 @@
 class Money
   class Currency
     module Loader
+      require "json"
+
       DATA_PATH = File.expand_path("../../../../config", __FILE__)
 
       # Loads and returns the currencies stored in JSON files in the config directory.

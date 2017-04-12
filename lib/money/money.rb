@@ -137,7 +137,7 @@ class Money
     if @default_currency.respond_to?(:call)
       Money::Currency.new(@default_currency.call)
     else
-      Money::Currency.new(@default_currency)
+      Money::Currency.wrap(@default_currency)
     end
   end
 
