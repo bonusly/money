@@ -37,7 +37,10 @@ class Money
     #   Money::Currency.find_by_iso_numeric(978) #=> #<Money::Currency id: eur ...>
     #   Money::Currency.find_by_iso_numeric('001') #=> nil
     def self.find_by_iso_numeric(num)
-      new(currency_table.find_id_by_iso_numeric(num))
+      num = num.to_s
+      return if num.empty?
+      id, _ = currency_table.find_id_by_iso_numeric(num)
+      new(id)
     rescue UnknownCurrency
       nil
     end
@@ -85,6 +88,17 @@ class Money
         c
       end.sort_by(&:priority)
     end
+
+    # Inherit a new currency from existing one
+    #
+    # @param parent_iso_code [String] the international 3-letter code as defined
+    # @param curr [Hash] See {register} method for hash structure
+    def self.inherit(parent_iso_code, curr)
+      parent_iso_code = parent_iso_code.downcase.to_sym
+      curr = currency_table.fetch(parent_iso_code).merge(curr)
+      register(curr)
+    end
+
 
     def self.register(curr)
       currency_table.register(curr)
